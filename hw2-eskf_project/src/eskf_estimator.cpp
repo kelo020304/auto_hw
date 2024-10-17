@@ -125,8 +125,8 @@ void EskfEstimator::PredictByImu(const Eigen::Vector3d &imuAcc, const Eigen::Vec
     std::cout<< " dt " << dt << std::endl;
     // mean prediction
     // *** assignment I ***
-    const Eigen::Vector3d acc = state_.q * (imuAcc) + gravity_;
-    const Eigen::Vector3d omg = (imuGyro) * dt / 2.0;
+    const Eigen::Vector3d acc = state_.q * (imuAcc - state_.ba) + gravity_;
+    const Eigen::Vector3d omg = (imuGyro - state_.bg) * dt / 2.0;
     Eigen::Quaterniond dq(1.0, omg[0] , omg[1], omg[2]);
     state_.q = (state_.q * dq ).normalized();
     state_.p = state_.p + state_.v * dt + 0.5 * acc * dt * dt;
@@ -143,6 +143,7 @@ void EskfEstimator::PredictByImu(const Eigen::Vector3d &imuAcc, const Eigen::Vec
     F.block<3, 3>(StateIndex::P, StateIndex::P) = Eigen::Matrix3d::Identity();
     F.block<3, 3>(0, StateIndex::BG) = (Eigen::Matrix3d::Zero()- Eigen::Matrix3d::Identity()) * dt;
     F.block<3, 3>(StateIndex::V, 0) = -state_.q.toRotationMatrix() * SkewSymmetric(imuAcc - state_.ba) * dt;
+    F.block<3, 3>(StateIndex::V, 9) = -state_.q.toRotationMatrix() * dt;
     std::cout<< " F\n " << F << std::endl;
 
     Eigen::Matrix<double, StateIndex::STATE_TOTAL,12> V = Eigen::MatrixXd::Zero(StateIndex::STATE_TOTAL, 12);
@@ -161,17 +162,40 @@ void EskfEstimator::PredictByImu(const Eigen::Vector3d &imuAcc, const Eigen::Vec
 
 void EskfEstimator::UpdateByWheel(const double &time, const Eigen::Vector3d &wheelSpeed) {
     // YOUR_CODE
-    std::cout<< " vel " << wheelSpeed << std::endl;
+    //calculate z pred
+    Eigen::Vector3d z_pred = state_.q.toRotationMatrix().inverse() * state_.v;
+    //calculate delta z
+    Eigen::Vector3d z_error = wheelSpeed - z_pred;
+
+    std::cout << "z_pred \n " << z_pred << std::endl;
+    std::cout << " z_error \n " << z_error << std::endl;
+
     Eigen::Matrix<double, 3, 15> C = Eigen::MatrixXd::Zero(3, 15);
-    C.block<3, 3>(0, 0) = SkewSymmetric(state_.q.toRotationMatrix().inverse() * wheelSpeed);
-    C.block<3, 3>(0, 6) = Rm_ * state_.q.toRotationMatrix().inverse();
+    C.block<3, 3>(0, 0) = SkewSymmetric(state_.q.inverse() * state_.v);
+    // Eigen::Quaterniond tt = state_.q.inverse();
+    // double x_1 = tt
+    // std::cout << "q inverse \n " << tt.coeffs() << std::endl;
+    C.block<3, 3>(0, 6) = state_.q.toRotationMatrix().inverse();
     std::cout << " C\n " << C << std::endl;
 
     Eigen::Matrix<double, 3, 3> W = Eigen::MatrixXd::Identity(3, 3);
     std::cout<< " W\n " << W << std::endl;
 //calculate kalman gain
-    Eigen::Matrix<double, 15, 3> K = state_.P * C.transpose() * (C * state_.P * C.transpose() + W * Rm_ * W.transpose());
+    Eigen::Matrix<double, 15, 3> K = state_.P * C.transpose() * (C * state_.P * C.transpose() + W * Rm_ * W.transpose()).inverse();
     std::cout << "kalman gain\n " << K << std::endl;
+
+    //delta x
+    Eigen::Matrix<double, 15, 1> delta_state = K * z_error;
+    std::cout << " delta_state \n " << delta_state << std::endl;
+    Eigen::Vector3d delta_R = delta_state.block<3, 1>(0,0);
+    Eigen::Quaterniond dq(1, delta_R[0] /2, delta_R[1] /2 , delta_R[2] /2);
+    state_.q = (state_.q * dq).normalized();
+    state_.p += delta_state.block<3, 1>(3,0);
+    state_.v += delta_state.block<3, 1>(6,0);
+    state_.ba += delta_state.block<3, 1>(9,0);
+    state_.bg += delta_state.block<3, 1>(12,0);
+
+    state_.P = state_.P - K * C * state_.P;
 
 }
 
