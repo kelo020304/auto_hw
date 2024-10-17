@@ -21,6 +21,7 @@ void EskfEstimator::InitState(const double &time) {
     state_.ba = Eigen::Vector3d(0, 0, 0);
     state_.bg = Eigen::Vector3d(0, 0, 0);
     state_.P = Eigen::Matrix<double, StateIndex::STATE_TOTAL, StateIndex::STATE_TOTAL>::Identity();
+    // std::cout << " init P " << state_.P << std::endl;
     state_.time = time;
     gravity_ = Eigen::Vector3d(0, 0, -9.805);
     stateInit_ = true;
@@ -114,12 +115,6 @@ void EskfEstimator::MainProcessThread() {
 }
 
 void EskfEstimator::PredictByImu(const Eigen::Vector3d &imuAcc, const Eigen::Vector3d &imuGyro, const double &t) {
-
-
-
-
-
-
     if (!stateInit_) {
         InitState(t);
     }
@@ -138,22 +133,45 @@ void EskfEstimator::PredictByImu(const Eigen::Vector3d &imuAcc, const Eigen::Vec
     state_.v = state_.v + acc * dt;
 
     // variance propogation
-    state_.time = t;
 
-    Eigen::Matrix<double, StateIndex::STATE_TOTAL, StateIndex::STATE_TOTAL> F = Eigen::MatrixXd::Zero(StateIndex::STATE_TOTAL, StateIndex::STATE_TOTAL);
+
+    Eigen::Matrix<double, StateIndex::STATE_TOTAL, StateIndex::STATE_TOTAL> F = Eigen::MatrixXd::Identity(StateIndex::STATE_TOTAL, StateIndex::STATE_TOTAL);
 
     // 填充状态转移矩阵 F
     F.block<3, 3>(StateIndex::P, StateIndex::V) = Eigen::Matrix3d::Identity() * dt;
     F.block<3, 3>(0,0) = Eigen::Matrix3d::Identity() - SkewSymmetric(imuGyro - state_.bg) * dt;
-    // std::cout<< " F1 " << F << std::endl;
-    // std::cout<< " imuAcc - state_.ba "  << imuAcc - state_.ba << std::endl;
+    F.block<3, 3>(StateIndex::P, StateIndex::P) = Eigen::Matrix3d::Identity();
+    F.block<3, 3>(0, StateIndex::BG) = (Eigen::Matrix3d::Zero()- Eigen::Matrix3d::Identity()) * dt;
     F.block<3, 3>(StateIndex::V, 0) = -state_.q.toRotationMatrix() * SkewSymmetric(imuAcc - state_.ba) * dt;
-    std::cout<< " F2 " << F << std::endl;
-//     F.block<3, 3>(StateIndex::ATTITUDE, StateIndex::GYRO_BIAS) = -Eigen::Matrix3d::Identity() * dt;
+    std::cout<< " F\n " << F << std::endl;
+
+    Eigen::Matrix<double, StateIndex::STATE_TOTAL,12> V = Eigen::MatrixXd::Zero(StateIndex::STATE_TOTAL, 12);
+    V.block<3, 3>(0, 0) = (Eigen::Matrix3d::Zero()-Eigen::Matrix3d::Identity()) * dt;
+    V.block<3, 3>(6, 3) = -state_.q.toRotationMatrix()* dt;
+    V.block<3, 3>(9,6) = Eigen::Matrix3d::Identity() * dt;
+    V.block<3, 3>(12,9) = Eigen::Matrix3d::Identity() * dt;
+    std::cout<< " V\n " << V << std::endl;
+
+
+    state_.P = F * state_.P * F.transpose() + V * Q_ * V.transpose();
+    std::cout << " state_.P \n "  << state_.P << std::endl;
+    // std::cout << " Q_ \n "  << Q_ << std::endl;
+    state_.time = t;
 }
 
 void EskfEstimator::UpdateByWheel(const double &time, const Eigen::Vector3d &wheelSpeed) {
     // YOUR_CODE
+    std::cout<< " vel " << wheelSpeed << std::endl;
+    Eigen::Matrix<double, 3, 15> C = Eigen::MatrixXd::Zero(3, 15);
+    C.block<3, 3>(0, 0) = SkewSymmetric(state_.q.toRotationMatrix().inverse() * wheelSpeed);
+    C.block<3, 3>(0, 6) = Rm_ * state_.q.toRotationMatrix().inverse();
+    std::cout << " C\n " << C << std::endl;
+
+    Eigen::Matrix<double, 3, 3> W = Eigen::MatrixXd::Identity(3, 3);
+    std::cout<< " W\n " << W << std::endl;
+//calculate kalman gain
+    Eigen::Matrix<double, 15, 3> K = state_.P * C.transpose() * (C * state_.P * C.transpose() + W * Rm_ * W.transpose());
+    std::cout << "kalman gain\n " << K << std::endl;
 
 }
 
